@@ -21,7 +21,8 @@ local ffi_cast            = ffi.cast
 local ffi_gc              = ffi.gc
 local C                   = ffi.C
 
-local _M    ={}
+local _D = {}
+local _M = {}
 _M._VERSION = '1.3.3'
 local mt = { __index = _M }
 
@@ -115,7 +116,7 @@ typedef struct MMDB_s {
 
 typedef  char * pchar;
 
-MMDB_lookup_result_s MMDB_lookup_string(MMDB_s *const mmdb,   const char *const ipstr, int *const gai_error,int *const mmdb_error);
+MMDB_lookup_result_s MMDB_lookup_string(MMDB_s *const mmdb, const char *const ipstr, int *const gai_error, int *const mmdb_error);
 int MMDB_open(const char *const filename, uint32_t flags, MMDB_s *const mmdb);
 int MMDB_aget_value(MMDB_entry_s *const start,  MMDB_entry_data_s *const entry_data,  const char *const *const path);
 char *MMDB_strerror(int error_code);
@@ -160,33 +161,34 @@ local MMDB_DATA_TYPE_END_MARKER                     =   13
 local MMDB_DATA_TYPE_BOOLEAN                        =   14
 local MMDB_DATA_TYPE_FLOAT                          =   15
 
--- copy from https://github.com/lilien1010/lua-resty-maxminddb/blob/f96633e2428f8f7bcc1e2a7a28b747b33233a8db/resty/maxminddb.lua#L136-L138
--- you should install the libmaxminddb to your system
-local maxm                                          = ffi.load('libmaxminddb')
---https://github.com/maxmind/libmaxminddb
-local mmdb                                          = ffi_new('MMDB_s')
 local initted                                       = false
 
-local function mmdb_strerror(rc)
-    return ffi_str(maxm.MMDB_strerror(rc))
+local function mmdb_strerror(profile, rc)
+    return ffi_str(_D[profile].maxm.MMDB_strerror(rc))
 end
 
 local function gai_strerror(rc)
     return ffi_str(C.gai_strerror(rc))
 end
 
-function _M.init(dbfile)
-  if not initted then
-    local maxmind_ready   = maxm.MMDB_open(dbfile,0,mmdb)
+function _M.init(profiles)
+  for profile, location in pairs(profiles) do
+    _D[profile] = {}
+    -- copy from https://github.com/lilien1010/lua-resty-maxminddb/blob/f96633e2428f8f7bcc1e2a7a28b747b33233a8db/resty/maxminddb.lua#L136-L138
+    -- you should install the libmaxminddb to your system
+    _D[profile].maxm = ffi.load('libmaxminddb')
+    --https://github.com/maxmind/libmaxminddb
+    _D[profile].mmdb = ffi_new('MMDB_s')
+    local maxmind_ready = _D[profile].maxm.MMDB_open(location, 0, _D[profile].mmdb)
 
     if maxmind_ready ~= MMDB_SUCCESS then
-        return nil, mmdb_strerror(maxmind_ready)
+      return nil, mmdb_strerror(profile, maxmind_ready)
     end
 
-    initted = true
-
-    ffi_gc(mmdb, maxm.MMDB_close)
+    ffi_gc(_D[profile].mmdb, _D[profile].maxm.MMDB_close)
   end
+
+  initted = true
   return initted
 end
 
@@ -196,10 +198,10 @@ end
 
 -- https://github.com/maxmind/libmaxminddb/blob/master/src/maxminddb.c#L1938
 -- LOCAL MMDB_entry_data_list_s *dump_entry_data_list( FILE *stream, MMDB_entry_data_list_s *entry_data_list, int indent, int *status)
-local function _dump_entry_data_list(entry_data_list,status)
+local function _dump_entry_data_list(entry_data_list, status)
 
   if not entry_data_list then
-    return nil,MMDB_INVALID_DATA_ERROR
+    return nil, MMDB_INVALID_DATA_ERROR
   end
 
   local entry_data_item = entry_data_list[0].entry_data
@@ -221,21 +223,21 @@ local function _dump_entry_data_list(entry_data_list,status)
       data_size = entry_data_item.data_size
 
       if MMDB_DATA_TYPE_UTF8_STRING  ~= data_type then
-        return nil,MMDB_INVALID_DATA_ERROR
+        return nil, MMDB_INVALID_DATA_ERROR
       end
 
-      local key = ffi_str(entry_data_item.utf8_string,data_size)
+      local key = ffi_str(entry_data_item.utf8_string, data_size)
 
       if not key then
-        return nil,MMDB_OUT_OF_MEMORY_ERROR
+        return nil, MMDB_OUT_OF_MEMORY_ERROR
       end
 
       local val
       entry_data_list = entry_data_list[0].next
-      entry_data_list,status,val = _dump_entry_data_list(entry_data_list)
+      entry_data_list, status, val = _dump_entry_data_list(entry_data_list)
 
       if status ~= MMDB_SUCCESS then
-        return nil,status
+        return nil, status
       end
 
       result[key] = val
@@ -254,10 +256,10 @@ local function _dump_entry_data_list(entry_data_list,status)
     while(i <= size and entry_data_list)
     do
       local val
-      entry_data_list,status,val = _dump_entry_data_list(entry_data_list)
+      entry_data_list, status, val = _dump_entry_data_list(entry_data_list)
 
       if status ~= MMDB_SUCCESS then
-        return nil,nil,val
+        return nil, nil, val
       end
 
       result[i] = val
@@ -275,16 +277,16 @@ local function _dump_entry_data_list(entry_data_list,status)
     -- other type "key":val
     -- default other type
     if data_type == MMDB_DATA_TYPE_UTF8_STRING then
-      val = ffi_str(entry_data_item.utf8_string,data_size)
+      val = ffi_str(entry_data_item.utf8_string, data_size)
       if not val then
         status = MMDB_OUT_OF_MEMORY_ERROR
-        return nil,status
+        return nil, status
       end
     elseif data_type == MMDB_DATA_TYPE_BYTES then
-      val = ffi_str(ffi_cast('char * ',entry_data_item.bytes),data_size)
+      val = ffi_str(ffi_cast('char * ', entry_data_item.bytes), data_size)
       if not val then
         status = MMDB_OUT_OF_MEMORY_ERROR
-        return nil,status
+        return nil, status
       end
     elseif data_type == MMDB_DATA_TYPE_DOUBLE then
       val = entry_data_item.double_value
@@ -301,7 +303,7 @@ local function _dump_entry_data_list(entry_data_list,status)
     elseif data_type == MMDB_DATA_TYPE_INT32 then
       val = entry_data_item.int32
     else
-      return nil,MMDB_INVALID_DATA_ERROR
+      return nil, MMDB_INVALID_DATA_ERROR
     end
 
     result = val
@@ -309,10 +311,10 @@ local function _dump_entry_data_list(entry_data_list,status)
   end
 
   status = MMDB_SUCCESS
-  return entry_data_list,status,result
+  return entry_data_list, status, result
 end
 
-function _M.lookup(ip)
+function _M.lookup(profile, ip)
 
   if not initted then
       return nil, "not initialized"
@@ -322,34 +324,34 @@ function _M.lookup(ip)
   local gai_error = ffi_new('int[1]')
   local mmdb_error = ffi_new('int[1]')
 
-  local result = maxm.MMDB_lookup_string(mmdb,ip,gai_error,mmdb_error)
+  local result = _D[profile].maxm.MMDB_lookup_string(_D[profile].mmdb, ip, gai_error, mmdb_error)
 
   if mmdb_error[0] ~= MMDB_SUCCESS then
-    return nil,'lookup failed: ' .. mmdb_strerror(mmdb_error[0])
+    return nil, 'lookup failed: ' .. mmdb_strerror(_D[profile].mmdb_error[0])
   end
 
   if gai_error[0] ~= MMDB_SUCCESS then
-    return nil,'lookup failed: ' .. gai_strerror(gai_error[0])
+    return nil, 'lookup failed: ' .. gai_strerror(gai_error[0])
   end
 
   if true ~= result.found_entry then
-    return nil,'not found'
+    return nil, 'not found'
   end
 
-  local entry_data_list = ffi_cast('MMDB_entry_data_list_s **const',ffi_new("MMDB_entry_data_list_s"))
+  local entry_data_list = ffi_cast('MMDB_entry_data_list_s **const', ffi_new("MMDB_entry_data_list_s"))
 
-  local status = maxm.MMDB_get_entry_data_list(result.entry,entry_data_list)
+  local status = _D[profile].maxm.MMDB_get_entry_data_list(result.entry, entry_data_list)
 
   if status ~= MMDB_SUCCESS then
-    return nil,'get entry data failed: ' .. mmdb_strerror(status)
+    return nil, 'get entry data failed: ' .. mmdb_strerror(profile, status)
   end
 
   local head = entry_data_list[0] -- Save so this can be passed to free fn.
-  local _,status,result = _dump_entry_data_list(entry_data_list)
-  maxm.MMDB_free_entry_data_list(head)
+  local _, status, result = _dump_entry_data_list(entry_data_list)
+  _D[profile].maxm.MMDB_free_entry_data_list(head)
 
   if status ~= MMDB_SUCCESS then
-    return nil,'dump entry data failed: ' .. mmdb_strerror(status)
+    return nil, 'dump entry data failed: ' .. mmdb_strerror(profile, status)
   end
 
 
