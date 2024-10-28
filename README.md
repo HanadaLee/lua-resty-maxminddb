@@ -60,9 +60,9 @@ server {
             local cjson = require 'cjson'
             local geo = require 'resty.maxminddb'
             if not geo.initted() then
-                geo.init("/path/to/GeoLite2-City.mmdb")
+                geo.init({city = "/path/to/GeoLite2-City.mmdb"})
             end
-            local res,err = geo.lookup(ngx.var.arg_ip or ngx.var.remote_addr) --support ipv6 e.g. 2001:4860:0:1001::3004:ef68
+            local res,err = geo.lookup("city", ngx.var.arg_ip or ngx.var.remote_addr) --support ipv6 e.g. 2001:4860:0:1001::3004:ef68
 
             if not res then
                 ngx.log(ngx.ERR,'failed to lookup by ip ,reason:',err)

@@ -21,9 +21,12 @@ local ffi_cast            = ffi.cast
 local ffi_gc              = ffi.gc
 local C                   = ffi.C
 
+local tab_isarray         = require ('table.isarray')
+local tab_nkeys           = require ('table.nkeys')
+
 local _D = {}
 local _M = {}
-_M._VERSION = '1.3.3'
+_M._VERSION = '1.3.4'
 local mt = { __index = _M }
 
 -- copy from https://github.com/lilien1010/lua-resty-maxminddb/blob/f96633e2428f8f7bcc1e2a7a28b747b33233a8db/resty/maxminddb.lua#L36-L126
@@ -314,7 +317,7 @@ local function _dump_entry_data_list(entry_data_list, status)
   return entry_data_list, status, result
 end
 
-function _M.lookup(profile, ip)
+function _M.lookup(profile, ip, lookup_path)
 
   if not initted then
       return nil, "not initialized"
@@ -339,8 +342,30 @@ function _M.lookup(profile, ip)
   end
 
   local entry_data_list = ffi_cast('MMDB_entry_data_list_s **const', ffi_new("MMDB_entry_data_list_s"))
+  local status
 
-  local status = _D[profile].maxm.MMDB_get_entry_data_list(result.entry, entry_data_list)
+  if lookup_path then
+    if not tab_isarray(lookup_path) then
+      return nil, 'lookup path expected array'
+    end
+
+    local lookup_path_len = tab_nkeys(lookup_path)
+    local entry_data = ffi_cast('MMDB_entry_data_s *const', ffi_new("MMDB_entry_data_s"))
+    local path = ffi_new('const char * [?]', lookup_path_len+1, lookup_path)  -- +1 for null termination
+    path[lookup_path_len] = ffi.NULL
+  
+    status = _D[profile].maxm.MMDB_aget_value(result.entry, entry_data, path)
+    if status == MMDB_SUCCESS then
+      if entry_data.offset == 0 then
+        return nil, 'no data found at the lookup path'
+      end
+      local entry = ffi_new("MMDB_entry_s", {mmdb=mmdb, offset=entry_data.offset})
+      status = _D[profile].maxm.MMDB_get_entry_data_list(entry, entry_data_list)
+    end
+
+  else
+    status = _D[profile].maxm.MMDB_get_entry_data_list(result.entry, entry_data_list)
+  end
 
   if status ~= MMDB_SUCCESS then
     return nil, 'get entry data failed: ' .. mmdb_strerror(profile, status)
